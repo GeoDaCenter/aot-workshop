@@ -1,0 +1,260 @@
+---
+title: "Part 2 - AOT Workshop"
+author: "Center for Spatial Data Science"
+date: "8/28/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo =TRUE)
+```
+
+![](logos.png)
+
+# Interpolating Temperature Data
+
+AoT Workshop, Spatial Analysis, Part 2. August 30th, 2018. Argonne National Laboratory
+
+This tutorial is brought to you by Anais Ladoy, Isaac Kamber, Marynia Kolak, Julia Koschinsky, and Luc Anselin at the Center for Spatial Data Science at the University of Chicago (see <a href>spatial.uchicago.edu</a> for more info). 
+
+***
+
+## Environment Setup
+
+Spatial analysis in R requires multiple libraries. Package installation is done with the following syntax: install.packages("sp"). Some of these take additional time for installation, depending on your system. The following list is comprehensive for this tutorial, as well as much spatial analysis.
+
+```{r}
+library(lubridate) #data wrangling
+library(sp) #spatial data wrangling & analysis
+library(rgdal) #spatial data wrangling
+library(rgeos) #spatial data wrangling
+library(raster) #spatial raster data wrangling
+library(gstat) #kriging and geostatistics
+library(tmap) #modern data visualizations
+library(leaflet) #modern data visualizations
+
+```
+
+## Import Data
+
+```{r}
+nodes <- read.csv("nodes.csv")
+head(nodes)
+
+sensor.info <- read.csv("sensors.csv")
+head(sensor.info)
+
+sensor.data <- read.csv("data.csv.gz")
+head(sensor.data)
+```
+
+## Data Wrangling
+
+### Filter to Temperature Sensor of Interest
+Isolate data for desired temperature sensor (tsys01 used for this). Get a summary of the data generated to confirm.
+```{r}
+temp.data <- sensor.data %>%
+  filter(sensor == "tsys01")
+
+summary(temp.data)
+```
+
+### Create Aggregate Temperature Variable
+
+The timestamp holds date and time information. We can use the ymd_hms function from the lubridate package to convert the timestamp from a factor into a more searcheable data structure.
+
+```{r}
+library(lubridate)
+temp.data$timestamp2 <- ymd_hms(temp.data$timestamp)
+```
+
+When viewing the structure of the timestamp, we see it has thousands of measurements throughout the day. Generate an average of temperature for the afternoon, or second half of the day, by filtering for hours after 12pm. Then, group by node, and calculate the average. More sophisticaed analysis will filter for more precise temporal windows, and incorporate min and max temperatures for air quality analysis.
+
+```{r}
+pm.temps <- temp.data %>% 
+  filter(hour(timestamp2) >= 12) %>%
+  group_by(node_id) %>%
+  summarize(avg_temp = mean(value_hrf))
+```
+
+Next, add a Fahrenheit conversion to facilitate interpretation.
+```{r}
+pm.temps$avg_tempF <- pm.temps$avg_temp*1.8+32
+```
+
+Examine data and remove a clearly faulty sensor (7.88 degrees celsius avg or 66.60 degrees Fahrenheit, accordingly.)
+```{r}
+pm.temps$avg_temp
+```
+
+In this step, we filter the data to take out the faulty sensor. In future work, this step will use a historical distribution of meteorological data (adjusted for seasonality) to more precisely tease out potentially faulty sensors. A sensor would be flagged for removal if it fell out of that range; the removal could be automatic or semi-automatic to facilitate additional guidance.
+
+```{r}
+pm.temps <- pm.temps %>%
+  filter(avg_temp > 15)
+```
+
+
+Next, we attach the hourly avg temperature to node info.
+```{r}
+node.temps <- merge(pm.temps, nodes, by = c("node_id"))
+```
+
+### Convert to Spatial Data Format
+Then, convert the completed node data to spatial object format for plotting and more advanced spatial analytics.
+```{r}
+coordinates(node.temps) <- node.temps[,c("lon", "lat")]
+proj4string(node.temps) <- CRS("+init=epsg:4326")
+```
+
+### Finalize Data Inspection
+There are 31 sensors with temperature data in the array.
+```{r}
+length(node.temps)
+head(node.temps)
+```
+
+## Plot Temperature Data by Sensor
+Confirm the success of spatial object transformation by simple plotting. 
+
+```{r}
+tmap_mode("view")
+tm_shape(node.temps) + tm_dots()
+```
+
+Add a new column equal to the average temp variable, renaming it "aveC" corresopnding to the Celsius unit. This step is used for troubleshooting plotting issues in the dot map to follow.
+
+```{r}
+node.temps$aveC<-as.numeric(node.temps$avg_temp)
+node.temps$aveF<-as.numeric(node.temps$avg_tempF)
+```
+
+
+### Overlay Commmunity Areas
+
+We add the Chicago Community Area spatial dataset (used in Part 1) to provide additional context for our maps.
+```{r}
+chiCA <- readOGR(".","ChiComArea")
+```
+
+Plot the temperature by sensor, adding Community Areas as a background.
+```{r}
+tmap_mode("view")
+tm_shape(chiCA) + tm_borders() + 
+  tm_shape(node.temps) + tm_dots(col="aveF",size=0.3,title="average temp (F)") 
+  
+
+```
+
+## Interpolate a Temperature Surface 
+
+We will use variograms to model the distribution of temperature data. We'll then generate a grid on top of the Chicago area, and with the appropriate variogram model selected, use kriging to predict a temperature surface.
+
+A variogram is a function that describes the degree of spatial dependence and contuinity across data. The final model uses the measure of variability between points at various distances. Points nearby are likely to have more similar values, and as distance between points increases, there is less likely to be similar values between points. In this application, we assume that temperature measurements that are further apart will vary more that measurements taken close together. 
+
+
+The variogram clearly has an outlier node, though it may not influence our final predicted surface. 
+```{r}
+tmp.vgm <- variogram(node.temps$avg_temp ~ 1, node.temps)
+plot(tmp.vgm)
+```
+
+### Spherical Model
+
+We will generate two theoretical models to best approximate the experimental data. First, a theoretical semivariogram uses a spherical model fit.
+
+```{r}
+tmp.fit.sph<- fit.variogram(tmp.vgm, model=vgm("Sph"))
+plot(tmp.vgm, tmp.fit.sph)
+```
+
+### Generate Grid
+
+Next, we'll create a grid from the Chicago area. The following function will generate a grid from a provided spatial data frame for n cells. 
+
+```{r}
+pt2grid <- function(ptframe,n) {
+  bb <- bbox(ptframe)  
+  ptcrs <- proj4string(ptframe)  
+  xrange <- abs(bb[1,1] - bb[1,2])  
+  yrange <- abs(bb[2,1] - bb[2,2])  
+  cs <- c(xrange/n,yrange/n)  
+  cc <- bb[,1] + (cs/2)  
+  dc <- c(n,n)  
+  x1 <- GridTopology(cellcentre.offset=cc,cellsize=cs,cells.dim=dc)  
+  x2 <- SpatialGrid(grid=x1,proj4string=CRS(ptcrs))
+  return(x2)
+}
+```
+
+First, let's generate a grid of 30 by 30 cells using the Chicago Community Area extent. Plot the grid for exploration.
+```{r}
+chi.grid <- pt2grid((chiCA),30)
+plot(chi.grid)
+```
+
+To get an even finer resolution, we generate a finer resolution of grid of 100 by 100 cells.
+```{r}
+chi.grid <- pt2grid((chiCA),100)
+plot(chi.grid)
+```
+
+### Prepare Data for Kriging
+
+First, we make sure that all our data is in the same projection. 
+```{r}
+projection(chi.grid) <- CRS("+init=epsg:4326")  
+projection(node.temps) <-  CRS("+init=epsg:4326")
+projection(chiCA) <- CRS("+init=epsg:4326")
+```
+
+Krige the data using the spherical model fit, and plot.
+```{r}
+temp.kriged <- krige(node.temps$avg_temp ~ 1, node.temps, chi.grid, model = tmp.fit.sph)
+plot(temp.kriged)
+```
+
+Clip to Chicago boundaries.
+```{r}
+chi.temp.kriged <- temp.kriged[chiCA,]
+plot(chi.temp.kriged)
+```
+
+Plot the kriged Chicago-area suface.
+```{r}
+tm_shape(chi.temp.kriged) +
+  tm_raster("var1.pred", style = "jenks", title = "Temperature (F)", palette = "BuPu") +
+  tm_layout(main.title = "Avg Afternoon Temperature August 25", main.title.size = 1.1) +
+  tm_legend(position = c("left", "bottom"))
+```
+
+### Exponential Model and Kriging Surface
+
+Next, we fit an Expoentntial model for the semivariogram.
+
+```{r}
+tmp.fit.exp<- fit.variogram(tmp.vgm, model=vgm("Exp"))
+plot(tmp.vgm, tmp.fit.exp)
+```
+
+We use the same process as above to generate a kriged surface. Compare the two models and predicted temperature surfaces. As more data are made available with the AoT sensors, the uncertainty across the temperature surface will be further reduced. 
+
+```{r}
+temp.kriged <- krige(node.temps$avg_temp ~ 1, node.temps, chi.grid, model = tmp.fit.exp)
+chi.temp.kriged <- temp.kriged[chiCA,]
+tm_shape(chi.temp.kriged) +
+  tm_raster("var1.pred", style = "jenks", title = "Temperature C)", palette = "BuPu") +
+  tm_layout(main.title = "Avg Afternoon Temperature August 25", main.title.size = 1.1) +
+  tm_legend(position = c("left", "bottom"))
+```
+
+To finalize the map, we add the sensors for reference.
+
+```{r}
+tm_shape(chi.temp.kriged) +
+  tm_raster("var1.pred", style = "jenks", title = "Temperature (C)", palette = "BuPu") + tm_shape(node.temps) + tm_dots(size=0.01) +
+  tm_layout(main.title = "Avg Afternoon Temperature August 25", main.title.size = 1.1) +
+  tm_legend(position = c("left", "bottom"))
+```
+
+
