@@ -154,7 +154,7 @@ tm_shape(chiCA) + tm_borders(alpha = 0.7) + tm_text("community", size=0.5) + tm_
 
 ## Mapping Density of AoT Sensors
 
-Let's further inspect the distribution of sensors across the city. Our next goal will be to generate a buffer of 1 kilometer around each sensor. We will then visualize the buffers, and finally calculat the density of AoT sensor areas per Community Areas.
+Let's further inspect the distribution of sensors across the city. Our next goal will be to generate a buffer of 1 kilometer around each sensor. We will then visualize the buffers, and finally calculate the density of AoT sensor areas per Community Area.
 
 First, we need to convert to a spatial project that preserves distance. We'll use EPSG:32616, which uses a unit of meters. See more about this project at: <a href>https://epsg.io/32616</a>.
 
