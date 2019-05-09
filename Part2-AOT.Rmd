@@ -32,20 +32,22 @@ library(raster) #spatial raster data wrangling
 library(gstat) #kriging and geostatistics
 library(tmap) #modern data visualizations
 library(leaflet) #modern data visualizations
+library(tibble)
+library(tidyverse)
 
 ```
 
 ## Import Data
 
 ```{r}
-nodes <- read.csv("nodes.csv")
+nodes <- read.csv("Data/nodes.csv")
 head(nodes)
 
-sensor.info <- read.csv("sensors.csv")
+sensor.info <- read.csv("Data/sensors.csv")
 head(sensor.info)
 
-sensor.data <- read.csv("data.csv.gz")
-head(sensor.data)
+sensor.data <- read.csv("Data/data.csv.gz")
+str(sensor.data)
 ```
 
 ## Data Wrangling
@@ -134,7 +136,7 @@ node.temps$aveF<-as.numeric(node.temps$avg_tempF)
 
 We add the Chicago Community Area spatial dataset (used in Part 1) to provide additional context for our maps.
 ```{r}
-chiCA <- readOGR(".","ChiComArea")
+chiCA <- readOGR("./Data","ChiComArea")
 ```
 
 Plot the temperature by sensor, adding Community Areas as a background.

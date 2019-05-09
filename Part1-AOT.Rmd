@@ -31,6 +31,8 @@ library(rgdal) #spatial data wrangling
 
 library(tmap) #modern data visualizations
 library(leaflet) #modern data visualizations
+library(rgeos)
+library(tibble)
 
 ```
 
@@ -39,32 +41,36 @@ library(leaflet) #modern data visualizations
 Former versions of uncalibrarted AoT data were found on the ANL Waggle datasite. This data was bundled daily to include all previous data, making the size unmanageable and not ideal for daily updates. (However, this data is still available and may be useful for one-off analysis or historical investigation of sensor data.) 
 
 In this tutorial, we focus on the new AoT data product, provided as complete daily data dumps on Plenar.io via <a href> 
-https://aot-file-browser.plenar.io/data-sets/chicago-complete</a>. We use data from August 25, 2018. 
+https://aot-file-browser.plenar.io/data-sets/chicago-complete</a>. 
 
-```{r}
-file.path <- c("https://s3.amazonaws.com/aot-tarballs/chicago-public.daily.2018-08-25.tar")
-file.dest <- c("08-25-2018_public.tar")
-download.file(file.path, file.dest)
-```
-We untar the file.
-```{r}
-untar(file.dest)
+We use files from August 25, 2018, which are archived in `./Data`. The code below should not be run, unless you want to update the files in `./Data`.
+
+```{r, eval=FALSE}
+## Note: This code chunk has been set to *not* evaluate using "eval=FALSE" 
+## option in the markdown file
+yesterday <- Sys.Date() - 1
+remote.file <- sprintf(c("https://s3.amazonaws.com/aot-tarballs/chicago-public.daily.%s.tar"),
+                       yesterday)
+local.file <- basename(remote.file)
+download.file(remote.file, local.file)
+## untar the file.
+untar(local.file)
 ```
 ## Read and Inspect Data
 Read in the files that contain node data, and inspect
 ```{r}
-nodes <- read.csv("nodes.csv")
+nodes <- read.csv("Data/nodes.csv")
 head(nodes)
 
-sensor.info <- read.csv("sensors.csv")
+sensor.info <- read.csv("Data/sensors.csv")
 head(sensor.info)
 
-provenance <- read.csv("provenance.csv")
+provenance <- read.csv("Data/provenance.csv")
 head(provenance)
 ```
 Read in the files that contain sensor data, and inspect
 ```{r}
-sensor.data <- read.csv("data.csv.gz")
+sensor.data <- read.csv("Data/data.csv.gz")
 head(sensor.data)
 ```
 Let's look at the underlying data structures of the data.
@@ -118,7 +124,7 @@ tm_shape(nodes.spt) + tm_dots("description",style="cat",size=0.1)
 For additional context, we'll add Chicago community areas as a layer. First, you will need to download a spatial file of Chicago communities in a format like geojson or shapefile. Here, we've downloaded and added a shapefile (composed of 4 data files) to the working directory for easy access. 
 
 ```{r}
-chiCA <- readOGR(".","ChiComArea")
+chiCA <- readOGR("./Data","ChiComArea")
 ```
 
 We could inspect the structure of the spatial data file using the str() function, we'll get a long overview returned detailing the complex spatial structures of the dataset. Spatial data formats are more complex than their non-spatial counterparts.
